@@ -12,3 +12,4 @@ The simulator:
 - Supports associativity (number of ways): 1, 2, 4, 8, 16.
 - Uses a 64 MB memory address space.
 - Collects cache hit/miss statistics using provided memory reference generators.
+
