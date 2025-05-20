@@ -1,150 +1,193 @@
 #include <iostream>
-#include  <iomanip>
+#include <iomanip>
 #include <vector>
 #include <list>
+#include <algorithm>
 using namespace std;
 
-#define		DBG				1
-#define		DRAM_SIZE		(64*1024*1024)
-#define		CACHE_SIZE		(64*1024)
+#define DRAM_SIZE       (64 * 1024 * 1024) // 64 MB
+#define CACHE_SIZE      (64 * 1024)        // 64 KB
+#define NUM_REFERENCES  1000000
 
+enum cacheResType { MISS = 0, HIT = 1 };
 
-#define BLOCK_SIZE 32
-#define NUM_LINES (CACHE_SIZE / BLOCK_SIZE)
-
-struct FALine {
-	unsigned int tag;
+// Cache structures
+struct CacheLine {
+    unsigned int tag;
+    bool valid;
 };
 
-vector<FALine> faCache;
-list<unsigned int> lruList; // Keeps track of access order
+vector<vector<CacheLine>> cache;
+vector<list<int>> lruLists;
+int numSets;
+int numWays;
+int lineSize;
 
-unsigned int cache[NUM_LINES];
-bool valid[NUM_LINES];
-
-enum cacheResType {MISS=0, HIT=1};
-
-/* The following implements a random number generator */
-unsigned int m_w = 0xABABAB55;    /* must not be zero, nor 0x464fffff */
-unsigned int m_z = 0x05080902;    /* must not be zero, nor 0x9068ffff */
+// Random number generator
+unsigned int m_w = 0xABABAB55;
+unsigned int m_z = 0x05080902;
 unsigned int rand_()
 {
     m_z = 36969 * (m_z & 65535) + (m_z >> 16);
     m_w = 18000 * (m_w & 65535) + (m_w >> 16);
-    return (m_z << 16) + m_w;  /* 32-bit result */
+    return (m_z << 16) + m_w;
 }
 
+// Memory reference generators
 unsigned int memGen1()
 {
-	static unsigned int addr=0;
-	return (addr++)%(DRAM_SIZE);
+    static unsigned int addr=0;
+    return (addr++)%(DRAM_SIZE);
 }
 
 unsigned int memGen2()
 {
-	static unsigned int addr=0;
-	return  rand_()%(24*1024);
+    static unsigned int addr=0;
+    return rand_()%(24*1024);  //24 KB
 }
 
 unsigned int memGen3()
 {
-	return rand_()%(DRAM_SIZE);
+    return rand_()%(DRAM_SIZE);
 }
 
 unsigned int memGen4()
 {
-	static unsigned int addr=0;
-	return (addr++)%(4*1024);
+    static unsigned int addr=0;
+    return (addr++)%(4*1024); // 4KB
 }
 
 unsigned int memGen5()
 {
-	static unsigned int addr=0;
-	return (addr++)%(1024*64);
+    static unsigned int addr=0;
+    return (addr++)%(1024*64); //64 KB
 }
 
 unsigned int memGen6()
 {
-	static unsigned int addr=0;
-	return (addr+=32)%(64*4*1024);
+    static unsigned int addr=0;
+    return (addr+=32)%(64*4*1024);
+}
+
+// Reset static variables
+void resetMemGens() {
+    m_w = 0xABABAB55;
+    m_z = 0x05080902;
+}
+
+// Initialize Cache
+void initCache(int sets, int ways, int blockSize) {
+    numSets = sets;
+    numWays = ways;
+    lineSize = blockSize;
+
+    cache.clear();
+    lruLists.clear();
+
+    cache.resize(numSets, vector<CacheLine>(numWays, {0, false}));
+    lruLists.resize(numSets);
+}
+
+// Cache Simulator
+cacheResType cacheSim(unsigned int addr) {
+    unsigned int blockAddr = addr / lineSize;
+    unsigned int index = blockAddr % numSets;
+    unsigned int tag = blockAddr / numSets;
+
+    auto &set = cache[index];
+    auto &lru = lruLists[index];
+
+    // Check for hit
+    for (int i = 0; i < numWays; ++i) {
+        if (set[i].valid && set[i].tag == tag) {
+            // Update LRU - remove and add to front
+            lru.remove(i);
+            lru.push_front(i);
+            return HIT;
+        }
+    }
+
+    // Miss - find empty slot or evict LRU
+    int replaceIndex = -1;
+
+    // Look for invalid line first
+    for (int i = 0; i < numWays; ++i) {
+        if (!set[i].valid) {
+            replaceIndex = i;
+            break;
+        }
+    }
+
+    // If no invalid line, use LRU
+    if (replaceIndex == -1) {
+        if (lru.size() < numWays) {
+            // Find a way that's not in the LRU list
+            for (int i = 0; i < numWays; ++i) {
+                if (find(lru.begin(), lru.end(), i) == lru.end()) {
+                    replaceIndex = i;
+                    break;
+                }
+            }
+        } else {
+            replaceIndex = lru.back();
+            lru.pop_back();
+        }
+    }
+    // Update cache
+    set[replaceIndex].tag = tag;
+    set[replaceIndex].valid = true;
+
+    // Update LRU
+    lru.remove(replaceIndex); // Remove if exists
+    lru.push_front(replaceIndex);
+
+    return MISS;
+}
+
+// Experiment 1: Fix sets to 4, vary line size
+void experimentVaryLineSize(unsigned int (*memGen)(), const string& genName) {
+    vector<int> lineSizes = {16, 32, 64, 128};
+    const int fixedSets = 4;
+    vector<pair<int, double>> results;
+
+    cout << "\n--- Experiment 1: Vary Line Size (Fixed Sets = 4) with " << genName << " ---\n";
+
+    for (int blockSize : lineSizes) {
+        int ways = CACHE_SIZE / (fixedSets * blockSize);
+        resetMemGens();
+        initCache(fixedSets, ways, blockSize);
+        unsigned int hits = 0, misses = 0;
+        for (int i = 0; i < NUM_REFERENCES; ++i) {
+            unsigned int addr = memGen();
+            if (cacheSim(addr) == HIT)
+                hits++;
+            else
+                misses++;
+        }
+        double hitRatio = 100.0 * hits / NUM_REFERENCES;
+        double missRatio = 100.0 * misses / NUM_REFERENCES;
+        results.push_back({blockSize, hitRatio});
+
+        cout << "Line size: " << blockSize << " bytes, Ways: " << ways
+             << ", Hit ratio: " << fixed << setprecision(4) << hitRatio
+             << "%, Miss ratio: " << missRatio << "%" << endl;
+    }
 }
 
 
-// Direct Mapped Cache Simulator
-cacheResType cacheSimDM(unsigned int addr)
-{
-	// This function accepts the memory address for the memory transaction and
-	// returns whether it caused a cache miss or a cache hit
+int main(){
+    // Run experiments with all memory generators
+    experimentVaryLineSize(memGen1, "memGen1");
 
-	// The current implementation assumes there is no cache; so, every transaction is a miss
-	unsigned int blockAddr = addr / BLOCK_SIZE;
-	unsigned int index = blockAddr % NUM_LINES;
-	unsigned int tag = blockAddr / NUM_LINES;
+    experimentVaryLineSize(memGen2, "memGen2");
 
-	if (valid[index] && cache[index] == tag) {
-		return HIT;
-	} else {
-		cache[index] = tag;
-		valid[index] = true;
-		return MISS;
-	}
-}
+    experimentVaryLineSize(memGen3, "memGen3");
 
+    experimentVaryLineSize(memGen4, "memGen4");
 
-// Fully Associative Cache Simulator
-cacheResType cacheSimFA(unsigned int addr)
-{
-	// This function accepts the memory address for the read and
-	// returns whether it caused a cache miss or a cache hit
+    experimentVaryLineSize(memGen5, "memGen5");
 
-	// The current implementation assumes there is no cache; so, every transaction is a miss
-	unsigned int blockAddr = addr / BLOCK_SIZE;
-	unsigned int tag = blockAddr;
+    experimentVaryLineSize(memGen6, "memGen6");
 
-	for (auto it = faCache.begin(); it != faCache.end(); ++it) {
-		if (it->tag == tag) {
-			lruList.remove(tag);
-			lruList.push_front(tag);
-			return HIT;
-		}
-	}
-	if (faCache.size() < NUM_LINES) {
-		faCache.push_back({tag});
-		lruList.push_front(tag);
-	} else {
-		unsigned int lruTag = lruList.back();
-		lruList.pop_back();
-		for (auto it = faCache.begin(); it != faCache.end(); ++it) {
-			if (it->tag == lruTag) {
-				faCache.erase(it);
-				break;
-			}
-		}
-
-		faCache.push_back({tag});
-		lruList.push_front(tag);
-	}
-
-	return MISS;
-}
-
-char *msg[2] = {"Miss","Hit"};
-
-#define		NO_OF_Iterations	1000		// CHange to 1,000,000
-int main()
-{
-	unsigned int hit = 0;
-	cacheResType r;
-
-	unsigned int addr;
-	cout << "Direct Mapped Cache Simulator\n";
-
-	for(int inst=0;inst<NO_OF_Iterations;inst++)
-	{
-		addr = memGen2();
-		r = cacheSimFA(addr);
-		if(r == HIT) hit++;
-		cout <<"0x" << setfill('0') << setw(8) << hex << addr <<" ("<< msg[r] <<")\n";
-	}
-	cout << "Hit ratio = " << (100*hit/NO_OF_Iterations)<< endl;
+    return 0;
 }
