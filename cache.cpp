@@ -173,21 +173,57 @@ void experimentVaryLineSize(unsigned int (*memGen)(), const string& genName) {
              << "%, Miss ratio: " << missRatio << "%" << endl;
     }
 }
+// Experiment 2: Fix line size to 64B, vary ways
+void experimentVaryWays(unsigned int (*memGen)(), const string& genName) {
+    vector<int> waysList = {1, 2, 4, 8, 16};
+    const int fixedLineSize = 64;
+    vector<pair<int, double>> results;
 
+    cout << "\n--- Experiment 2: Vary Ways (Fixed Line Size = 64B) with " << genName << " ---\n";
+
+    for (int ways : waysList) {
+        int sets = CACHE_SIZE / (ways * fixedLineSize);
+        resetMemGens();
+        initCache(sets, ways, fixedLineSize);
+
+        unsigned int hits = 0, misses = 0;
+        for (int i = 0; i < NUM_REFERENCES; ++i) {
+            unsigned int addr = memGen();
+            if (cacheSim(addr) == HIT)
+                hits++;
+            else
+                misses++;
+        }
+
+        double hitRatio = 100.0 * hits / NUM_REFERENCES;
+        double missRatio = 100.0 * misses / NUM_REFERENCES;
+        results.push_back({ways, hitRatio});
+
+        cout << "Ways: " << ways << ", Sets: " << sets
+             << ", Hit ratio: " << fixed << setprecision(4) << hitRatio
+             << "%, Miss ratio: " << missRatio << "%" << endl;
+    }
+}
 
 int main(){
     // Run experiments with all memory generators
     experimentVaryLineSize(memGen1, "memGen1");
+    experimentVaryWays(memGen1, "memGen1");
 
     experimentVaryLineSize(memGen2, "memGen2");
+    experimentVaryWays(memGen2, "memGen2");
 
     experimentVaryLineSize(memGen3, "memGen3");
+    experimentVaryWays(memGen3, "memGen3");
 
     experimentVaryLineSize(memGen4, "memGen4");
+    experimentVaryWays(memGen4, "memGen4");
 
     experimentVaryLineSize(memGen5, "memGen5");
+    experimentVaryWays(memGen5, "memGen5");
 
     experimentVaryLineSize(memGen6, "memGen6");
+    experimentVaryWays(memGen6, "memGen6");
 
     return 0;
 }
